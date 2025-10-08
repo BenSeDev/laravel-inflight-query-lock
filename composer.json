@@ -1,0 +1,66 @@
+{
+    "name": "bensedev/laravel-inflight-query-lock",
+    "description": "Deduplicate concurrent identical queries using distributed locks and async execution",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "laravel",
+        "query",
+        "cache",
+        "lock",
+        "deduplication",
+        "coalescing",
+        "inflight",
+        "performance"
+    ],
+    "authors": [
+        {
+            "name": "bensedev",
+            "email": "ben.serlippens@gmail.com",
+            "role": "Developer"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Bensedev\\LaravelInflightQueryLock\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Bensedev\\LaravelInflightQueryLock\\Tests\\": "tests/"
+        }
+    },
+    "minimum-stability": "stable",
+    "require": {
+        "php": "^8.4",
+        "illuminate/support": "^12.0",
+        "illuminate/database": "^12.0",
+        "illuminate/queue": "^12.0",
+        "illuminate/cache": "^12.0",
+        "illuminate/contracts": "^12.0"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.0",
+        "nunomaduro/collision": "^v8.1.1",
+        "pestphp/pest": "^v3.0.0",
+        "phpunit/phpunit": "^11.0.0",
+        "phpstan/phpstan": "^2.1"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Bensedev\\LaravelInflightQueryLock\\InflightQueryLockServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/pest",
+        "analyse": "vendor/bin/phpstan analyse --error-format=table",
+        "format": "vendor/bin/pint"
+    }
+}
