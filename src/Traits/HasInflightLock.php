@@ -5,6 +5,7 @@ namespace Bensedev\LaravelInflightQueryLock\Traits;
 use Bensedev\LaravelInflightQueryLock\Builders\InflightQueryBuilder;
 use Illuminate\Database\Eloquent\Builder;
 
+/** @phpstan-ignore-next-line */
 trait HasInflightLock
 {
     /**

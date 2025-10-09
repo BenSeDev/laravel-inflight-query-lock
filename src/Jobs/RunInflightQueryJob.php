@@ -2,20 +2,27 @@
 
 namespace Bensedev\LaravelInflightQueryLock\Jobs;
 
+use Bensedev\LaravelInflightQueryLock\Contracts\Logger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
+use Throwable;
 
 final class RunInflightQueryJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable;
+    use InteractsWithQueue;
+    use Queueable;
+    use SerializesModels;
 
+    /**
+     * @param  array<int, mixed>  $bindings
+     */
     public function __construct(
         private readonly string $sql,
         private readonly array $bindings,
@@ -27,30 +34,34 @@ final class RunInflightQueryJob implements ShouldQueue
         private readonly ?string $modelClass = null
     ) {}
 
-    public function handle(): void
+    public function handle(Logger $logger): void
     {
-        $cacheStore = Cache::store(name: config(key: 'inflight-query-lock.cache_store'));
+        $cacheStore = Cache::store(name: Config::string(key: 'inflight-query-lock.cache_store'));
 
         // Double-check if result is already cached
         if ($cacheStore->has(key: $this->cacheKey)) {
-            $this->log(message: "Result already cached for key: {$this->cacheKey}");
+            $logger->handle(message: "Result already cached for key: {$this->cacheKey}");
+
             return;
         }
 
+        /** @phpstan-ignore-next-line */
         $lock = $cacheStore->lock(name: $this->lockKey, seconds: 10);
 
         try {
             // Acquire execution lock
-            if (!$lock->get()) {
-                $this->log(message: "Could not acquire execution lock for: {$this->lockKey}");
+            if (! $lock->get()) {
+                $logger->handle(message: "Could not acquire execution lock for: {$this->lockKey}");
+
                 return;
             }
 
             // Execute the query
-            $this->log(message: "Executing query for cache key: {$this->cacheKey}");
+            $logger->handle(message: "Executing query for cache key: {$this->cacheKey}");
 
             $results = DB::connection(name: $this->connectionName)
-                ->select(query: $this->sql, bindings: $this->bindings);
+                ->select(query: $this->sql, bindings: $this->bindings)
+            ;
 
             // Serialize results
             $serialized = $this->serialize(results: $results);
@@ -62,10 +73,10 @@ final class RunInflightQueryJob implements ShouldQueue
                 ttl: $this->ttl
             );
 
-            $this->log(message: "Query result cached for key: {$this->cacheKey}");
+            $logger->handle(message: "Query result cached for key: {$this->cacheKey}");
 
-        } catch (\Throwable $e) {
-            $this->log(message: "Error executing query: {$e->getMessage()}");
+        } catch (Throwable $e) {
+            $logger->handle(message: "Error executing query: {$e->getMessage()}");
             throw $e;
         } finally {
             $lock->release();
@@ -75,7 +86,7 @@ final class RunInflightQueryJob implements ShouldQueue
     /**
      * Serialize query results for caching.
      *
-     * @param array<int, object> $results
+     * @param  array<int, object>  $results
      * @return array<string, mixed>
      */
     private function serialize(array $results): array
@@ -98,15 +109,5 @@ final class RunInflightQueryJob implements ShouldQueue
                 array: $results
             ),
         ];
-    }
-
-    /**
-     * Log a message if logging is enabled.
-     */
-    private function log(string $message): void
-    {
-        if (config(key: 'inflight-query-lock.enable_logging')) {
-            Log::info(message: "[RunInflightQueryJob] {$message}");
-        }
     }
 }

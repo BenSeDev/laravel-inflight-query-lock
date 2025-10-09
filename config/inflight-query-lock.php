@@ -68,7 +68,7 @@ return [
     |
     */
 
-    'queue_connection' => env('INFLIGHT_QUERY_QUEUE_CONNECTION', null),
+    'queue_connection' => env('INFLIGHT_QUERY_QUEUE_CONNECTION', 'default'),
 
     /*
     |--------------------------------------------------------------------------
@@ -91,5 +91,18 @@ return [
     */
 
     'enable_logging' => env('INFLIGHT_QUERY_ENABLE_LOGGING', false),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Log Channel
+    |--------------------------------------------------------------------------
+    |
+    | The log channel to use for logging inflight query events.
+    | You can define custom channels in config/logging.php to send logs
+    | to external services or applications.
+    |
+    */
+
+    'log_channel' => env('INFLIGHT_QUERY_LOG_CHANNEL', 'stack'),
 
 ];
