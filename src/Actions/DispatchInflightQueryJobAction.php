@@ -25,14 +25,15 @@ final readonly class DispatchInflightQueryJobAction implements DispatchInflightQ
         string $lockKey,
         int $ttl
     ): void {
-        $job = (new RunEloquentQueryJob(
-            queryCallback: new SerializableClosure($queryCallback),
-            cacheKey: $cacheKey,
-            lockKey: $lockKey,
-            ttl: $ttl
-        ))->onConnection($this->config->queueConnection)
-            ->onQueue($this->config->queue);
-
-        $this->dispatcher->dispatch($job);
+        $this->dispatcher->dispatch(
+            new RunEloquentQueryJob(
+                queryCallback: new SerializableClosure($queryCallback),
+                cacheKey: $cacheKey,
+                lockKey: $lockKey,
+                ttl: $ttl
+            )
+                ->onConnection($this->config->queueConnection)
+                ->onQueue($this->config->queue)
+        );
     }
 }

@@ -37,8 +37,6 @@ final readonly class WaitForQueryResultAction implements WaitForQueryResultActio
 
         // Collections are now stored directly in cache (Laravel serializes them automatically)
         /** @var Collection<int, Model>|array<int, mixed> */
-        $cached = $this->cache->get(key: $cacheKey);
-
-        return $cached;
+        return $this->cache->get(key: $cacheKey);
     }
 }

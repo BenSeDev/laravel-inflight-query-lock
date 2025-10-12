@@ -34,9 +34,7 @@ final readonly class ExecuteInflightQueryAction implements ExecuteInflightQueryA
             $this->logger->handle(message: "Result already cached for key: {$cacheKey}");
 
             /** @var Collection<int, Model>|array<int, mixed> */
-            $cached = $this->cache->get(key: $cacheKey);
-
-            return $cached;
+            return $this->cache->get(key: $cacheKey);
         }
 
         /** @phpstan-ignore-next-line */
@@ -66,7 +64,6 @@ final readonly class ExecuteInflightQueryAction implements ExecuteInflightQueryA
             $this->logger->handle(message: "Query result cached for key: {$cacheKey} ({$count} items)");
 
             return $results;
-
         } catch (Throwable $e) {
             $this->logger->handle(message: "Error executing query: {$e->getMessage()}");
             throw $e;

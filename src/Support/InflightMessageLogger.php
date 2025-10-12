@@ -8,9 +8,7 @@ use Illuminate\Support\Facades\Log;
 
 final readonly class InflightMessageLogger implements Logger
 {
-    public function __construct(
-        private InflightQueryLockConfig $config
-    ) {}
+    public function __construct(private InflightQueryLockConfig $config) {}
 
     /**
      * Log a message if logging is enabled.

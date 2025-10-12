@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * @template TModel of Model
+ *
  * @extends EloquentBuilder<TModel>
  */
 class InflightQueryBuilder extends EloquentBuilder
@@ -30,31 +31,32 @@ class InflightQueryBuilder extends EloquentBuilder
     /**
      * Execute the query as a "select" statement.
      *
-     * @param array<int, string> $columns
+     * @param  array<int, string>  $columns
      * @return Collection<int, TModel>
      */
     public function get($columns = ['*']): Collection
     {
-        if ($this->inflightTtl !== null) {
-            $this->query->columns = $columns;
-
-            /** @var InflightQueryLock $inflightLock */
-            $inflightLock = app(abstract: InflightQueryLock::class);
-
-            // Create a closure that captures the current query state
-            // This will be serialized and executed in the job
-            $queryCallback = fn (): Collection => parent::get(columns: $columns);
-
-            /** @var Collection<int, TModel> $result */
-            $result = $inflightLock->execute(
-                query: $this,
-                queryCallback: $queryCallback,
-                ttl: $this->inflightTtl
-            );
-
-            return $result;
+        if ($this->inflightTtl === null) {
+            // If inflight locking is not enabled, just call the parent method
+            return parent::get(columns: $columns);
         }
 
-        return parent::get(columns: $columns);
+        $this->query->columns = $columns;
+
+        /** @var InflightQueryLock $inflightLock */
+        $inflightLock = app(abstract: InflightQueryLock::class);
+
+        // Create a closure that captures the current query state
+        // This will be serialized and executed in the job
+        $queryCallback = fn (): Collection => parent::get(columns: $columns);
+
+        /** @var Collection<int, TModel> $result */
+        $result = $inflightLock->execute(
+            query: $this,
+            queryCallback: $queryCallback,
+            ttl: $this->inflightTtl
+        );
+
+        return $result;
     }
 }
