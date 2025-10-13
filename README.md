@@ -5,6 +5,10 @@
 
 Deduplicate concurrent identical queries using distributed locks and async execution. When multiple requests trigger the same slow query simultaneously, only one executes while others wait for the cached result.
 
+## Origin Story
+
+This package was born out of necessity during numerous migration projects where we encountered heavy database queries that couldn't be easily optimized through traditional means like pagination or query simplification. Time and resource constraints forced creative solutions, and this approach proved effective in production environments. Rather than keeping this solution to ourselves, we're sharing it with the community in hopes it helps others facing similar challenges.
+
 ## The Problem
 
 Imagine 100 concurrent requests all hitting an analytics dashboard that runs the same expensive query:
@@ -358,7 +362,7 @@ Contributions are welcome! Please see [CONTRIBUTING](CONTRIBUTING.md) for detail
 
 ## Security
 
-If you discover any security issues, please email ben.serlippens@gmail.com instead of using the issue tracker.
+If you discover any security issues, please report them via the GitHub issue tracker with the "security" label.
 
 ## Credits
 
