@@ -2,15 +2,15 @@
 
 namespace Bensedev\LaravelInflightQueryLock\Contracts;
 
-use Closure;
+use Bensedev\LaravelInflightQueryLock\ValueObjects\RecordableQuery;
 
 interface DispatchInflightQueryJobActionContract
 {
     /**
-     * Dispatch the query execution job with a serializable closure.
+     * Dispatch the query execution job with recordable query.
      */
     public function handle(
-        Closure $queryCallback,
+        RecordableQuery $recordableQuery,
         string $cacheKey,
         string $lockKey,
         int $ttl

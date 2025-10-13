@@ -11,7 +11,7 @@
 |
 */
 
-// uses(TestCase::class)->in('Feature');
+uses(Bensedev\LaravelInflightQueryLock\Tests\TestCase::class)->in('Unit');
 
 /*
 |--------------------------------------------------------------------------

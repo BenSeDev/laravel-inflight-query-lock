@@ -84,35 +84,6 @@ it('polls until result is cached', function (): void {
     ;
 });
 
-it('returns array results when cached result is array', function (): void {
-    $cacheKey = 'test:result:abc123';
-    $hash = 'abc123';
-
-    $cachedResult = [
-        ['id' => 1, 'name' => 'John'],
-        ['id' => 2, 'name' => 'Jane'],
-    ];
-
-    $this->cache
-        ->shouldReceive('has')
-        ->once()
-        ->with($cacheKey)
-        ->andReturn(true)
-    ;
-
-    $this->cache
-        ->shouldReceive('get')
-        ->once()
-        ->with($cacheKey)
-        ->andReturn($cachedResult)
-    ;
-
-    $result = $this->action->handle(cacheKey: $cacheKey, hash: $hash);
-
-    expect($result)->toBe($cachedResult)
-        ->and($result)->toHaveCount(2)
-    ;
-});
 
 it('throws exception when timeout is exceeded', function (): void {
     $cacheKey = 'test:result:abc123';
@@ -225,32 +196,6 @@ it('returns empty collection when cached result is empty', function (): void {
     ;
 });
 
-it('returns empty array when cached result is empty array', function (): void {
-    $cacheKey = 'test:result:abc123';
-    $hash = 'abc123';
-
-    $cachedResult = [];
-
-    $this->cache
-        ->shouldReceive('has')
-        ->once()
-        ->with($cacheKey)
-        ->andReturn(true)
-    ;
-
-    $this->cache
-        ->shouldReceive('get')
-        ->once()
-        ->with($cacheKey)
-        ->andReturn($cachedResult)
-    ;
-
-    $result = $this->action->handle(cacheKey: $cacheKey, hash: $hash);
-
-    expect($result)->toBe($cachedResult)
-        ->and($result)->toBeEmpty()
-    ;
-});
 
 it('respects lock timeout from config', function (): void {
     // Create config with 5 second timeout

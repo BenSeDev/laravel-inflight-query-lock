@@ -6,13 +6,13 @@ use Bensedev\LaravelInflightQueryLock\Contracts\DispatchInflightQueryJobActionCo
 use Bensedev\LaravelInflightQueryLock\Contracts\Logger;
 use Bensedev\LaravelInflightQueryLock\Contracts\WaitForQueryResultActionContract;
 use Bensedev\LaravelInflightQueryLock\Support\QueryHasher;
+use Bensedev\LaravelInflightQueryLock\Support\QueryRecorder;
 use Bensedev\LaravelInflightQueryLock\ValueObjects\InflightQueryLockConfig;
-use Closure;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Query\Builder as QueryBuilder;
+use Psr\SimpleCache\InvalidArgumentException;
 
 final readonly class InflightQueryLock
 {
@@ -26,52 +26,87 @@ final readonly class InflightQueryLock
 
     /**
      * Execute a query with inflight locking.
+     * Converts the builder to executable PHP code for serialization.
      *
-     * @param  EloquentBuilder<Model>|QueryBuilder  $query
-     * @return Collection<int, Model>|array<int, mixed>
+     * @param  EloquentBuilder<Model>  $query
+     * @param  array<int, string>  $columns
+     * @param  string  $executionMethod  The method to execute (get, count, first, etc.)
+     * @return Collection<int, Model>|int|Model|null
+     *
+     * @throws InvalidArgumentException
      */
     public function execute(
-        EloquentBuilder|QueryBuilder $query,
-        Closure $queryCallback,
-        int $ttl
-    ): Collection|array {
-        $hash = QueryHasher::hash(query: $query);
+        EloquentBuilder $query,
+        array $columns,
+        int $ttl,
+        string $executionMethod = 'get'
+    ): mixed {
+        // Include execution method in hash to differentiate get() from count(), etc.
+        $hash = QueryHasher::hash(query: $query, executionMethod: $executionMethod);
         $cacheKey = QueryHasher::cacheKey(hash: $hash, prefix: $this->config->cachePrefix);
         $lockKey = QueryHasher::lockKey(hash: $hash, prefix: $this->config->cachePrefix);
+
+        $dispatchFlagKey = "{$this->config->cachePrefix}:dispatching:{$hash}";
 
         // Check if result is already cached
         if ($this->cache->has(key: $cacheKey)) {
             $this->logger->handle(message: "Cache hit for query hash: {$hash}");
 
-            /** @var Collection<int, Model>|array<int, mixed> */
-            $cached = $this->cache->get(key: $cacheKey);
-
-            return $cached;
+            /** @var Collection<int, Model>|int|Model|null */
+            return $this->cache->get(key: $cacheKey);
         }
 
-        // Try to acquire lock
+        // Try to acquire lock first (before any expensive operations)
         /** @phpstan-ignore-next-line */
         $lock = $this->cache->lock(
             name: $lockKey,
             seconds: $this->config->lockTimeout
         );
 
-        if ($lock->get()) {
-            $this->logger->handle(message: "Lock acquired for query hash: {$hash}, dispatching job");
-
-            // Dispatch async job to execute query with closure
-            $this->dispatcher->handle(
-                queryCallback: $queryCallback,
-                cacheKey: $cacheKey,
-                lockKey: $lockKey,
-                ttl: $ttl
-            );
-
-            // Release the acquisition lock (job will handle execution)
-            $lock->release();
-        } else {
+        if (! $lock->get()) {
             $this->logger->handle(message: "Lock not acquired for query hash: {$hash}, waiting for result");
+
+            return $this->waiter->handle(cacheKey: $cacheKey, hash: $hash);
         }
+
+        // Double-check cache after acquiring lock (another request might have cached it)
+        // This prevents unnecessary job dispatches if the result is already cached and prevents race conditions
+        /** @phpstan-ignore-next-line */
+        if ($this->cache->has(key: $cacheKey)) {
+            $this->logger->handle(message: "Cache hit after lock acquisition for hash: {$hash}");
+            $lock->release();
+
+            /** @var Collection<int, Model>|int|Model|null */
+            return $this->cache->get(key: $cacheKey);
+        }
+
+        // Try to atomically set dispatch flag (only succeeds if not already set)
+        // add() returns true only if the key didn't exist before - this prevents duplicate dispatches
+        $dispatchFlagTtl = $this->config->lockTimeout + 60;
+        $wasDispatched = ! $this->cache->add(key: $dispatchFlagKey, value: true, ttl: $dispatchFlagTtl);
+
+        if ($wasDispatched) {
+            $this->logger->handle(message: "Job already dispatched by another request for hash: {$hash}");
+            $lock->release();
+
+            return $this->waiter->handle(cacheKey: $cacheKey, hash: $hash);
+        }
+
+        $this->logger->handle(message: "Lock acquired for query hash: {$hash}, dispatching job");
+
+        // Record query builder method calls for replay (only after we know we'll dispatch)
+        $recordableQuery = QueryRecorder::record($query, $executionMethod);
+
+        // Dispatch async job with recordable query
+        $this->dispatcher->handle(
+            recordableQuery: $recordableQuery,
+            cacheKey: $cacheKey,
+            lockKey: $lockKey,
+            ttl: $ttl
+        );
+
+        // Release the acquisition lock (job will handle execution)
+        $lock->release();
 
         // Wait for result to be cached
         return $this->waiter->handle(cacheKey: $cacheKey, hash: $hash);

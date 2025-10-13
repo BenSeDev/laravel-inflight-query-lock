@@ -2,7 +2,6 @@
 
 namespace Bensedev\LaravelInflightQueryLock;
 
-use Bensedev\LaravelInflightQueryLock\Actions\DeserializeQueryResultAction;
 use Bensedev\LaravelInflightQueryLock\Actions\DispatchInflightQueryJobAction;
 use Bensedev\LaravelInflightQueryLock\Actions\ExecuteInflightQueryAction;
 use Bensedev\LaravelInflightQueryLock\Actions\WaitForQueryResultAction;
@@ -13,7 +12,7 @@ use Bensedev\LaravelInflightQueryLock\Contracts\WaitForQueryResultActionContract
 use Bensedev\LaravelInflightQueryLock\Support\InflightMessageLogger;
 use Bensedev\LaravelInflightQueryLock\ValueObjects\InflightQueryLockConfig;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
-use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\ServiceProvider;
 
@@ -31,11 +30,6 @@ class InflightQueryLockServiceProvider extends ServiceProvider
             concrete: fn (): InflightQueryLockConfig => InflightQueryLockConfig::fromArray(
                 config: Config::array(key: 'inflight-query-lock')
             )
-        );
-
-        $this->app->singleton(
-            abstract: DeserializeQueryResultAction::class,
-            concrete: fn (): DeserializeQueryResultAction => new DeserializeQueryResultAction()
         );
 
         $this->app->singleton(
@@ -57,7 +51,8 @@ class InflightQueryLockServiceProvider extends ServiceProvider
             abstract: ExecuteInflightQueryActionContract::class,
             concrete: fn (Application $app): ExecuteInflightQueryAction => new ExecuteInflightQueryAction(
                 cache: $app->make(abstract: CacheFactory::class)->store(name: Config::string(key: 'inflight-query-lock.cache_store')),
-                logger: $app->make(abstract: Logger::class)
+                logger: $app->make(abstract: Logger::class),
+                app: $app
             )
         );
 

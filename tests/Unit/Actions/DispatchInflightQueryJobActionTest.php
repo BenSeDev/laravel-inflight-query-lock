@@ -2,9 +2,11 @@
 
 use Bensedev\LaravelInflightQueryLock\Actions\DispatchInflightQueryJobAction;
 use Bensedev\LaravelInflightQueryLock\Jobs\RunEloquentQueryJob;
+use Bensedev\LaravelInflightQueryLock\Tests\Stubs\StubTestModel;
 use Bensedev\LaravelInflightQueryLock\ValueObjects\InflightQueryLockConfig;
+use Bensedev\LaravelInflightQueryLock\ValueObjects\QueryMethodCall;
+use Bensedev\LaravelInflightQueryLock\ValueObjects\RecordableQuery;
 use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Database\Eloquent\Collection;
 
 beforeEach(function (): void {
     $this->config = new InflightQueryLockConfig(
@@ -26,7 +28,10 @@ beforeEach(function (): void {
 });
 
 it('dispatches RunEloquentQueryJob with correct parameters', function (): void {
-    $queryCallback = fn (): Collection => new Collection();
+    $methodCalls = [
+        new QueryMethodCall('where', ['id', '=', 1]),
+    ];
+    $recordableQuery = new RecordableQuery(StubTestModel::class, $methodCalls);
     $cacheKey = 'test:result:abc123';
     $lockKey = 'test:lock:abc123';
     $ttl = 3600;
@@ -39,6 +44,15 @@ it('dispatches RunEloquentQueryJob with correct parameters', function (): void {
 
             // Verify the job has correct properties
             $reflection = new ReflectionClass($job);
+
+            // Check recordableQuery
+            $queryProperty = $reflection->getProperty('recordableQuery');
+            $queryProperty->setAccessible(true);
+            $query = $queryProperty->getValue($job);
+            expect($query)->toBeInstanceOf(RecordableQuery::class)
+                ->and($query->getModelClass())->toBe(StubTestModel::class)
+                ->and($query->getMethodCalls())->toHaveCount(1)
+            ;
 
             // Check cacheKey
             $cacheKeyProperty = $reflection->getProperty('cacheKey');
@@ -60,7 +74,7 @@ it('dispatches RunEloquentQueryJob with correct parameters', function (): void {
     ;
 
     $this->action->handle(
-        queryCallback: $queryCallback,
+        recordableQuery: $recordableQuery,
         cacheKey: $cacheKey,
         lockKey: $lockKey,
         ttl: $ttl
@@ -68,7 +82,7 @@ it('dispatches RunEloquentQueryJob with correct parameters', function (): void {
 });
 
 it('dispatches job to configured queue', function (): void {
-    $queryCallback = fn (): Collection => new Collection();
+    $recordableQuery = new RecordableQuery(StubTestModel::class, []);
     $cacheKey = 'test:result:abc123';
     $lockKey = 'test:lock:abc123';
     $ttl = 3600;
@@ -85,7 +99,7 @@ it('dispatches job to configured queue', function (): void {
     ;
 
     $this->action->handle(
-        queryCallback: $queryCallback,
+        recordableQuery: $recordableQuery,
         cacheKey: $cacheKey,
         lockKey: $lockKey,
         ttl: $ttl
@@ -93,7 +107,7 @@ it('dispatches job to configured queue', function (): void {
 });
 
 it('dispatches job to configured connection', function (): void {
-    $queryCallback = fn (): Collection => new Collection();
+    $recordableQuery = new RecordableQuery(StubTestModel::class, []);
     $cacheKey = 'test:result:abc123';
     $lockKey = 'test:lock:abc123';
     $ttl = 3600;
@@ -110,50 +124,7 @@ it('dispatches job to configured connection', function (): void {
     ;
 
     $this->action->handle(
-        queryCallback: $queryCallback,
-        cacheKey: $cacheKey,
-        lockKey: $lockKey,
-        ttl: $ttl
-    );
-});
-
-it('wraps callback in SerializableClosure', function (): void {
-    $executedClosure = false;
-    $queryCallback = function () use (&$executedClosure): Collection {
-        $executedClosure = true;
-
-        return new Collection();
-    };
-
-    $cacheKey = 'test:result:abc123';
-    $lockKey = 'test:lock:abc123';
-    $ttl = 3600;
-
-    $this->dispatcher
-        ->shouldReceive('dispatch')
-        ->once()
-        ->with(Mockery::on(function ($job) use (&$executedClosure) {
-            expect($job)->toBeInstanceOf(RunEloquentQueryJob::class);
-
-            $reflection = new ReflectionClass($job);
-            $callbackProperty = $reflection->getProperty('queryCallback');
-            $callbackProperty->setAccessible(true);
-            $serializableClosure = $callbackProperty->getValue($job);
-
-            // Verify it's a SerializableClosure
-            expect($serializableClosure)->toBeInstanceOf(\Laravel\SerializableClosure\SerializableClosure::class);
-
-            // Verify the closure can be executed
-            $closure = $serializableClosure->getClosure();
-            $closure();
-            expect($executedClosure)->toBeTrue();
-
-            return true;
-        }))
-    ;
-
-    $this->action->handle(
-        queryCallback: $queryCallback,
+        recordableQuery: $recordableQuery,
         cacheKey: $cacheKey,
         lockKey: $lockKey,
         ttl: $ttl
@@ -161,7 +132,7 @@ it('wraps callback in SerializableClosure', function (): void {
 });
 
 it('dispatches job with different TTL values', function (): void {
-    $queryCallback = fn (): Collection => new Collection();
+    $recordableQuery = new RecordableQuery(StubTestModel::class, []);
     $cacheKey = 'test:result:abc123';
     $lockKey = 'test:lock:abc123';
 
@@ -173,7 +144,7 @@ it('dispatches job with different TTL values', function (): void {
 
     // Test with 1 hour TTL
     $this->action->handle(
-        queryCallback: $queryCallback,
+        recordableQuery: $recordableQuery,
         cacheKey: $cacheKey,
         lockKey: $lockKey,
         ttl: 3600
@@ -181,7 +152,7 @@ it('dispatches job with different TTL values', function (): void {
 
     // Test with 1 day TTL
     $this->action->handle(
-        queryCallback: $queryCallback,
+        recordableQuery: $recordableQuery,
         cacheKey: $cacheKey,
         lockKey: $lockKey,
         ttl: 86400
@@ -206,7 +177,7 @@ it('uses config queue connection and queue name', function (): void {
         dispatcher: $customDispatcher
     );
 
-    $queryCallback = fn (): Collection => new Collection();
+    $recordableQuery = new RecordableQuery(StubTestModel::class, []);
     $cacheKey = 'test:result:abc123';
     $lockKey = 'test:lock:abc123';
     $ttl = 3600;
@@ -224,7 +195,7 @@ it('uses config queue connection and queue name', function (): void {
     ;
 
     $customAction->handle(
-        queryCallback: $queryCallback,
+        recordableQuery: $recordableQuery,
         cacheKey: $cacheKey,
         lockKey: $lockKey,
         ttl: $ttl
@@ -232,8 +203,15 @@ it('uses config queue connection and queue name', function (): void {
 });
 
 it('dispatches multiple jobs independently', function (): void {
-    $queryCallback1 = fn (): Collection => new Collection();
-    $queryCallback2 = fn (): Collection => new Collection();
+    $methodCalls1 = [
+        new QueryMethodCall('where', ['id', '=', 1]),
+    ];
+    $recordableQuery1 = new RecordableQuery(StubTestModel::class, $methodCalls1);
+
+    $methodCalls2 = [
+        new QueryMethodCall('where', ['id', '=', 2]),
+    ];
+    $recordableQuery2 = new RecordableQuery(StubTestModel::class, $methodCalls2);
 
     $this->dispatcher
         ->shouldReceive('dispatch')
@@ -242,16 +220,61 @@ it('dispatches multiple jobs independently', function (): void {
     ;
 
     $this->action->handle(
-        queryCallback: $queryCallback1,
+        recordableQuery: $recordableQuery1,
         cacheKey: 'test:result:hash1',
         lockKey: 'test:lock:hash1',
         ttl: 3600
     );
 
     $this->action->handle(
-        queryCallback: $queryCallback2,
+        recordableQuery: $recordableQuery2,
         cacheKey: 'test:result:hash2',
         lockKey: 'test:lock:hash2',
         ttl: 7200
     );
+});
+
+it('dispatches jobs with complex queries', function (): void {
+    $methodCalls = [
+        new QueryMethodCall('where', ['status', '=', 'active']),
+        new QueryMethodCall('whereIn', ['type', ['A', 'B']]),
+        new QueryMethodCall('orderBy', ['created_at', 'desc']),
+        new QueryMethodCall('limit', [50]),
+    ];
+    $recordableQuery = new RecordableQuery(StubTestModel::class, $methodCalls);
+    $cacheKey = 'test:result:complex';
+    $lockKey = 'test:lock:complex';
+    $ttl = 3600;
+
+    $this->dispatcher
+        ->shouldReceive('dispatch')
+        ->once()
+        ->with(Mockery::on(function ($job) {
+            expect($job)->toBeInstanceOf(RunEloquentQueryJob::class);
+
+            $reflection = new ReflectionClass($job);
+            $queryProperty = $reflection->getProperty('recordableQuery');
+            $queryProperty->setAccessible(true);
+            $query = $queryProperty->getValue($job);
+
+            expect($query)->toBeInstanceOf(RecordableQuery::class)
+                ->and($query->getModelClass())->toBe(StubTestModel::class)
+                ->and($query->getMethodCalls())->toHaveCount(4); // where, whereIn, orderBy, limit
+
+            return true;
+        }))
+    ;
+
+    $this->action->handle(
+        recordableQuery: $recordableQuery,
+        cacheKey: $cacheKey,
+        lockKey: $lockKey,
+        ttl: $ttl
+    );
+});
+
+it('is a readonly class', function (): void {
+    $reflection = new ReflectionClass(DispatchInflightQueryJobAction::class);
+
+    expect($reflection->isReadOnly())->toBeTrue();
 });

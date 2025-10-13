@@ -5,9 +5,8 @@ namespace Bensedev\LaravelInflightQueryLock\Actions;
 use Bensedev\LaravelInflightQueryLock\Contracts\DispatchInflightQueryJobActionContract;
 use Bensedev\LaravelInflightQueryLock\Jobs\RunEloquentQueryJob;
 use Bensedev\LaravelInflightQueryLock\ValueObjects\InflightQueryLockConfig;
-use Closure;
+use Bensedev\LaravelInflightQueryLock\ValueObjects\RecordableQuery;
 use Illuminate\Contracts\Bus\Dispatcher;
-use Laravel\SerializableClosure\SerializableClosure;
 
 final readonly class DispatchInflightQueryJobAction implements DispatchInflightQueryJobActionContract
 {
@@ -17,17 +16,17 @@ final readonly class DispatchInflightQueryJobAction implements DispatchInflightQ
     ) {}
 
     /**
-     * Dispatch the query execution job with a serializable closure.
+     * Dispatch the query execution job with recordable query.
      */
     public function handle(
-        Closure $queryCallback,
+        RecordableQuery $recordableQuery,
         string $cacheKey,
         string $lockKey,
         int $ttl
     ): void {
         $this->dispatcher->dispatch(
             new RunEloquentQueryJob(
-                queryCallback: new SerializableClosure($queryCallback),
+                recordableQuery: $recordableQuery,
                 cacheKey: $cacheKey,
                 lockKey: $lockKey,
                 ttl: $ttl

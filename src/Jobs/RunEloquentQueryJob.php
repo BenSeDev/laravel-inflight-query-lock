@@ -3,16 +3,16 @@
 namespace Bensedev\LaravelInflightQueryLock\Jobs;
 
 use Bensedev\LaravelInflightQueryLock\Contracts\ExecuteInflightQueryActionContract;
+use Bensedev\LaravelInflightQueryLock\ValueObjects\RecordableQuery;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Laravel\SerializableClosure\SerializableClosure;
 
 /**
  * Job that executes a full Eloquent query with relations.
- * Uses SerializableClosure to preserve the entire query context.
+ * Uses RecordableQuery (recorded method calls) to preserve the query state.
  */
 final class RunEloquentQueryJob implements ShouldQueue
 {
@@ -22,7 +22,7 @@ final class RunEloquentQueryJob implements ShouldQueue
     use SerializesModels;
 
     public function __construct(
-        private readonly SerializableClosure $queryCallback,
+        private readonly RecordableQuery $recordableQuery,
         private readonly string $cacheKey,
         private readonly string $lockKey,
         private readonly int $ttl,
@@ -34,7 +34,7 @@ final class RunEloquentQueryJob implements ShouldQueue
     public function handle(ExecuteInflightQueryActionContract $action): void
     {
         $action->handle(
-            queryCallback: $this->queryCallback->getClosure(),
+            recordableQuery: $this->recordableQuery,
             cacheKey: $this->cacheKey,
             lockKey: $this->lockKey,
             ttl: $this->ttl

@@ -3,8 +3,9 @@
 use Bensedev\LaravelInflightQueryLock\Contracts\ExecuteInflightQueryActionContract;
 use Bensedev\LaravelInflightQueryLock\Jobs\RunEloquentQueryJob;
 use Bensedev\LaravelInflightQueryLock\Tests\Stubs\StubTestModel;
+use Bensedev\LaravelInflightQueryLock\ValueObjects\QueryMethodCall;
+use Bensedev\LaravelInflightQueryLock\ValueObjects\RecordableQuery;
 use Illuminate\Database\Eloquent\Collection;
-use Laravel\SerializableClosure\SerializableClosure;
 
 it('calls ExecuteInflightQueryAction with correct parameters', function (): void {
     $cacheKey = 'test:result:abc123';
@@ -15,14 +16,13 @@ it('calls ExecuteInflightQueryAction with correct parameters', function (): void
         new StubTestModel(['id' => 1, 'name' => 'Test']),
     ]);
 
-    $queryCallback = fn (): Collection => $queryResult;
-    $serializableClosure = new SerializableClosure($queryCallback);
+    $recordableQuery = new RecordableQuery(StubTestModel::class, []);
 
     $action = Mockery::mock(ExecuteInflightQueryActionContract::class);
     $action->shouldReceive('handle')
         ->once()
         ->with(
-            Mockery::type('Closure'),
+            Mockery::type(RecordableQuery::class),
             $cacheKey,
             $lockKey,
             $ttl
@@ -31,7 +31,7 @@ it('calls ExecuteInflightQueryAction with correct parameters', function (): void
     ;
 
     $job = new RunEloquentQueryJob(
-        $serializableClosure,
+        $recordableQuery,
         $cacheKey,
         $lockKey,
         $ttl
@@ -40,30 +40,26 @@ it('calls ExecuteInflightQueryAction with correct parameters', function (): void
     $job->handle($action);
 });
 
-it('unwraps SerializableClosure before passing to action', function (): void {
+it('passes RecordableQuery to action', function (): void {
     $cacheKey = 'test:result:abc123';
     $lockKey = 'test:lock:abc123';
     $ttl = 3600;
 
-    $executed = false;
-    $queryCallback = function () use (&$executed): Collection {
-        $executed = true;
-
-        return new Collection();
-    };
-    $serializableClosure = new SerializableClosure($queryCallback);
+    $methodCalls = [
+        new QueryMethodCall('where', ['id', '=', 1]),
+    ];
+    $recordableQuery = new RecordableQuery(StubTestModel::class, $methodCalls);
 
     $action = Mockery::mock(ExecuteInflightQueryActionContract::class);
     $action->shouldReceive('handle')
         ->once()
         ->with(
-            Mockery::on(function ($closure) use (&$executed) {
-                // Verify it's a closure (unwrapped)
-                expect($closure)->toBeCallable();
-
-                // Execute to verify it works
-                $closure();
-                expect($executed)->toBeTrue();
+            Mockery::on(function ($arg) {
+                // Verify it's a RecordableQuery with correct structure
+                expect($arg)->toBeInstanceOf(RecordableQuery::class)
+                    ->and($arg->getModelClass())->toBe(StubTestModel::class)
+                    ->and($arg->getMethodCalls())->toHaveCount(1)
+                ;
 
                 return true;
             }),
@@ -75,36 +71,7 @@ it('unwraps SerializableClosure before passing to action', function (): void {
     ;
 
     $job = new RunEloquentQueryJob(
-        queryCallback: $serializableClosure,
-        cacheKey: $cacheKey,
-        lockKey: $lockKey,
-        ttl: $ttl
-    );
-
-    $job->handle($action);
-});
-
-it('handles array results from query callback', function (): void {
-    $cacheKey = 'test:result:abc123';
-    $lockKey = 'test:lock:abc123';
-    $ttl = 3600;
-
-    $queryResult = [
-        ['id' => 1, 'name' => 'John'],
-        ['id' => 2, 'name' => 'Jane'],
-    ];
-
-    $queryCallback = fn (): array => $queryResult;
-    $serializableClosure = new SerializableClosure($queryCallback);
-
-    $action = Mockery::mock(ExecuteInflightQueryActionContract::class);
-    $action->shouldReceive('handle')
-        ->once()
-        ->andReturn($queryResult)
-    ;
-
-    $job = new RunEloquentQueryJob(
-        queryCallback: $serializableClosure,
+        recordableQuery: $recordableQuery,
         cacheKey: $cacheKey,
         lockKey: $lockKey,
         ttl: $ttl
@@ -114,11 +81,10 @@ it('handles array results from query callback', function (): void {
 });
 
 it('is a queue job with correct traits', function (): void {
-    $queryCallback = fn (): Collection => new Collection();
-    $serializableClosure = new SerializableClosure($queryCallback);
+    $recordableQuery = new RecordableQuery(StubTestModel::class, []);
 
     $job = new RunEloquentQueryJob(
-        queryCallback: $serializableClosure,
+        recordableQuery: $recordableQuery,
         cacheKey: 'test:result:abc',
         lockKey: 'test:lock:abc',
         ttl: 3600
@@ -135,11 +101,10 @@ it('is a queue job with correct traits', function (): void {
 });
 
 it('implements ShouldQueue interface', function (): void {
-    $queryCallback = fn (): Collection => new Collection();
-    $serializableClosure = new SerializableClosure($queryCallback);
+    $recordableQuery = new RecordableQuery(StubTestModel::class, []);
 
     $job = new RunEloquentQueryJob(
-        queryCallback: $serializableClosure,
+        recordableQuery: $recordableQuery,
         cacheKey: 'test:result:abc',
         lockKey: 'test:lock:abc',
         ttl: 3600
@@ -148,34 +113,112 @@ it('implements ShouldQueue interface', function (): void {
     expect($job)->toBeInstanceOf(Illuminate\Contracts\Queue\ShouldQueue::class);
 });
 
-it('handles closures with captured variables', function (): void {
+it('can be serialized and unserialized', function (): void {
+    $methodCalls = [
+        new QueryMethodCall('where', ['status', '=', 'active']),
+    ];
+    $recordableQuery = new RecordableQuery(StubTestModel::class, $methodCalls);
     $cacheKey = 'test:result:abc123';
     $lockKey = 'test:lock:abc123';
     $ttl = 3600;
 
-    $capturedValue = 'captured';
-    $queryCallback = fn (): Collection => new Collection([
-        new StubTestModel(['id' => 1, 'name' => $capturedValue]),
-    ]);
-    $serializableClosure = new SerializableClosure($queryCallback);
+    $job = new RunEloquentQueryJob(
+        recordableQuery: $recordableQuery,
+        cacheKey: $cacheKey,
+        lockKey: $lockKey,
+        ttl: $ttl
+    );
+
+    $serialized = serialize($job);
+    $unserialized = unserialize($serialized);
+
+    expect($unserialized)->toBeInstanceOf(RunEloquentQueryJob::class);
+
+    // Verify properties are preserved
+    $reflection = new ReflectionClass($unserialized);
+
+    $cacheKeyProperty = $reflection->getProperty('cacheKey');
+    $cacheKeyProperty->setAccessible(true);
+    expect($cacheKeyProperty->getValue($unserialized))->toBe($cacheKey);
+
+    $lockKeyProperty = $reflection->getProperty('lockKey');
+    $lockKeyProperty->setAccessible(true);
+    expect($lockKeyProperty->getValue($unserialized))->toBe($lockKey);
+
+    $ttlProperty = $reflection->getProperty('ttl');
+    $ttlProperty->setAccessible(true);
+    expect($ttlProperty->getValue($unserialized))->toBe($ttl);
+
+    $queryProperty = $reflection->getProperty('recordableQuery');
+    $queryProperty->setAccessible(true);
+    $unserializedQuery = $queryProperty->getValue($unserialized);
+    expect($unserializedQuery)->toBeInstanceOf(RecordableQuery::class)
+        ->and($unserializedQuery->getModelClass())->toBe(StubTestModel::class)
+        ->and($unserializedQuery->getMethodCalls())->toHaveCount(1)
+    ;
+});
+
+it('preserves complex queries through serialization', function (): void {
+    $methodCalls = [
+        new QueryMethodCall('where', ['id', '>', 10]),
+        new QueryMethodCall('whereIn', ['status', ['active', 'pending']]),
+        new QueryMethodCall('orderBy', ['created_at', 'desc']),
+        new QueryMethodCall('limit', [50]),
+    ];
+    $recordableQuery = new RecordableQuery(StubTestModel::class, $methodCalls);
+
+    $job = new RunEloquentQueryJob(
+        recordableQuery: $recordableQuery,
+        cacheKey: 'test:result:abc',
+        lockKey: 'test:lock:abc',
+        ttl: 3600
+    );
+
+    $serialized = serialize($job);
+    $unserialized = unserialize($serialized);
+
+    $reflection = new ReflectionClass($unserialized);
+    $queryProperty = $reflection->getProperty('recordableQuery');
+    $queryProperty->setAccessible(true);
+    $unserializedQuery = $queryProperty->getValue($unserialized);
+
+    expect($unserializedQuery)->toBeInstanceOf(RecordableQuery::class)
+        ->and($unserializedQuery->getModelClass())->toBe(StubTestModel::class)
+        ->and($unserializedQuery->getMethodCalls())->toHaveCount(4); // where, whereIn, orderBy, limit
+});
+
+it('handles different TTL values', function (): void {
+    $recordableQuery = new RecordableQuery(StubTestModel::class, []);
 
     $action = Mockery::mock(ExecuteInflightQueryActionContract::class);
     $action->shouldReceive('handle')
-        ->once()
-        ->andReturnUsing(function ($closure) use ($capturedValue) {
-            $result = $closure();
-            expect($result->first()->getAttributes()['name'])->toBe($capturedValue);
-
-            return $result;
-        })
+        ->twice()
+        ->andReturn(new Collection())
     ;
 
-    $job = new RunEloquentQueryJob(
-        $serializableClosure,
-        $cacheKey,
-        $lockKey,
-        $ttl
+    // Test with 1 hour TTL
+    $job1 = new RunEloquentQueryJob(
+        recordableQuery: $recordableQuery,
+        cacheKey: 'test:result:1',
+        lockKey: 'test:lock:1',
+        ttl: 3600
     );
+    $job1->handle($action);
 
-    $job->handle($action);
+    // Test with 1 day TTL
+    $job2 = new RunEloquentQueryJob(
+        recordableQuery: $recordableQuery,
+        cacheKey: 'test:result:2',
+        lockKey: 'test:lock:2',
+        ttl: 86400
+    );
+    $job2->handle($action);
+
+    expect(true)->toBeTrue(); // Test passed if no exceptions
+});
+
+it('is a final class', function (): void {
+    $reflection = new ReflectionClass(RunEloquentQueryJob::class);
+
+    expect($reflection->isFinal())->toBeTrue();
 });

@@ -2,17 +2,21 @@
 
 namespace Bensedev\LaravelInflightQueryLock\Support;
 
+use Closure;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use ReflectionFunction;
 
 final readonly class QueryHasher
 {
     /**
-     * Generate a unique hash for a query based on SQL, bindings, connection, and eager loads.
+     * Generate a unique hash for a query based on SQL, bindings, connection, eager loads, and execution method.
      *
-     * @param EloquentBuilder<\Illuminate\Database\Eloquent\Model>|QueryBuilder $query
+     * @param  EloquentBuilder<Model>|QueryBuilder  $query
+     * @param  string  $executionMethod  The execution method (get, count, first, etc.)
      */
-    public static function hash(EloquentBuilder|QueryBuilder $query): string
+    public static function hash(EloquentBuilder|QueryBuilder $query, string $executionMethod = 'get'): string
     {
         $sql = $query->toSql();
         $bindings = $query->getBindings();
@@ -30,6 +34,7 @@ final readonly class QueryHasher
                 'bindings' => $bindings,
                 'connection' => $connection,
                 'eagerLoads' => $eagerLoads,
+                'executionMethod' => $executionMethod, // Include execution method in hash
             ],
             flags: JSON_THROW_ON_ERROR
         );
@@ -41,7 +46,7 @@ final readonly class QueryHasher
      * Serialize eager loads for consistent hashing.
      * Handles closures by converting them to a string representation.
      *
-     * @param  array<string, \Closure|mixed>  $eagerLoads
+     * @param  array<string, Closure|mixed>  $eagerLoads
      * @return array<string, string|mixed>
      */
     private static function serializeEagerLoads(array $eagerLoads): array
@@ -49,22 +54,24 @@ final readonly class QueryHasher
         $serialized = [];
 
         foreach ($eagerLoads as $relation => $constraints) {
-            if ($constraints instanceof \Closure) {
+            if ($constraints instanceof Closure) {
                 // Use reflection to get a unique representation of the closure
-                $reflection = new \ReflectionFunction($constraints);
+                $reflection = new ReflectionFunction($constraints);
                 $fileName = $reflection->getFileName();
                 $startLine = $reflection->getStartLine();
                 $endLine = $reflection->getEndLine();
 
-                $serialized[$relation] = sprintf(
+                $serialized[$relation] = \sprintf(
                     'closure:%s:%d-%d',
                     $fileName !== false ? $fileName : 'runtime',
                     $startLine !== false ? $startLine : 0,
                     $endLine !== false ? $endLine : 0
                 );
-            } else {
-                $serialized[$relation] = $constraints;
+
+                continue;
             }
+
+            $serialized[$relation] = $constraints;
         }
 
         return $serialized;

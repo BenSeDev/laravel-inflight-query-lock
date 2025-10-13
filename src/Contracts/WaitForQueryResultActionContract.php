@@ -10,7 +10,7 @@ interface WaitForQueryResultActionContract
     /**
      * Wait for the query result to be cached.
      *
-     * @return Collection<int, Model>|array<int, mixed>
+     * @return Collection<int, Model>|int|Model|null
      */
-    public function handle(string $cacheKey, string $hash): Collection|array;
+    public function handle(string $cacheKey, string $hash): mixed;
 }
