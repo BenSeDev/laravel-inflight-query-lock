@@ -2,7 +2,6 @@
 
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/bensedev/laravel-inflight-query-lock.svg?style=flat-square)](https://packagist.org/packages/bensedev/laravel-inflight-query-lock)
 [![Total Downloads](https://img.shields.io/packagist/dt/bensedev/laravel-inflight-query-lock.svg?style=flat-square)](https://packagist.org/packages/bensedev/laravel-inflight-query-lock)
-[![CI](https://github.com/BenSeDev/laravel-inflight-query-lock/actions/workflows/ci.yml/badge.svg)](https://github.com/BenSeDev/laravel-inflight-query-lock/actions/workflows/ci.yml)
 
 Deduplicate concurrent identical queries using distributed locks and async execution. When multiple requests trigger the same slow query simultaneously, only one executes while others wait for the cached result.
 
