@@ -3,6 +3,7 @@
 namespace Bensedev\LaravelInflightQueryLock\Actions;
 
 use Bensedev\LaravelInflightQueryLock\Contracts\WaitForQueryResultActionContract;
+use Bensedev\LaravelInflightQueryLock\Exceptions\InflightQueryError;
 use Bensedev\LaravelInflightQueryLock\ValueObjects\InflightQueryLockConfig;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
@@ -39,7 +40,14 @@ final readonly class WaitForQueryResultAction implements WaitForQueryResultActio
             usleep(microseconds: $this->config->pollInterval);
         }
 
+        $result = $this->cache->get(key: $cacheKey);
+
+        // Check if the cached value is an error marker
+        if ($result instanceof InflightQueryError) {
+            throw $result;
+        }
+
         /** @var Collection<int, Model>|int|Model|null */
-        return $this->cache->get(key: $cacheKey);
+        return $result;
     }
 }
