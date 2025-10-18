@@ -2,6 +2,7 @@
 
 use Bensedev\LaravelInflightQueryLock\Actions\ExecuteInflightQueryAction;
 use Bensedev\LaravelInflightQueryLock\Contracts\Logger;
+use Bensedev\LaravelInflightQueryLock\Exceptions\InflightQueryError;
 use Bensedev\LaravelInflightQueryLock\Support\QueryRecorder;
 use Bensedev\LaravelInflightQueryLock\Tests\Stubs\StubTestModel;
 use Bensedev\LaravelInflightQueryLock\ValueObjects\RecordableQuery;
@@ -230,6 +231,26 @@ it('releases lock even when query execution fails', function (): void {
         ->with(Mockery::pattern('/Error executing query:/'))
     ;
 
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with("Stored error marker in cache for key: {$cacheKey}")
+    ;
+
+    // Expect error marker to be stored
+    $this->cache
+        ->shouldReceive('put')
+        ->once()
+        ->with($cacheKey, Mockery::type(InflightQueryError::class), 60)
+    ;
+
+    // Expect dispatch flag to be cleared
+    $this->cache
+        ->shouldReceive('forget')
+        ->once()
+        ->with('test:dispatching:abc123')
+    ;
+
     // Create a RecordableQuery with invalid model class that will fail when executed
     $recordableQuery = new RecordableQuery(
         'NonExistentModelClass',
@@ -343,7 +364,21 @@ it('removes recursion context even on failure', function (): void {
 
     $this->logger
         ->shouldReceive('handle')
-        ->twice()
+        ->times(3)  // Executing, error, stored marker
+    ;
+
+    // Expect error marker to be stored
+    $this->cache
+        ->shouldReceive('put')
+        ->once()
+        ->with($cacheKey, Mockery::type(InflightQueryError::class), 60)
+    ;
+
+    // Expect dispatch flag to be cleared
+    $this->cache
+        ->shouldReceive('forget')
+        ->once()
+        ->with('test:dispatching:abc123')
     ;
 
     // Verify context is not set initially
@@ -426,3 +461,90 @@ it('uses correct lock timeout of 10 seconds', function (): void {
         ttl: $ttl
     );
 })->skip('Requires database connection');
+
+it('stores error marker in cache when query execution fails', function (): void {
+    $cacheKey = 'test:result:abc123';
+    $lockKey = 'test:lock:abc123';
+    $ttl = 3600;
+
+    $lock = Mockery::mock(Lock::class);
+    $lock->shouldReceive('get')->once()->andReturn(true);
+    $lock->shouldReceive('release')->once();
+
+    $this->cache
+        ->shouldReceive('has')
+        ->once()
+        ->with($cacheKey)
+        ->andReturn(false)
+    ;
+
+    $this->cache
+        ->shouldReceive('lock')
+        ->once()
+        ->with($lockKey, 10)
+        ->andReturn($lock)
+    ;
+
+    $this->app
+        ->shouldReceive('instance')
+        ->once()
+        ->with('inflight.executing', true)
+    ;
+
+    $this->app
+        ->shouldReceive('forgetInstance')
+        ->once()
+        ->with('inflight.executing')
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with("Executing recorded query for cache key: {$cacheKey}")
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with(Mockery::pattern('/Error executing query:/'))
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with("Stored error marker in cache for key: {$cacheKey}")
+    ;
+
+    // Expect error marker to be stored with 60 second TTL
+    $this->cache
+        ->shouldReceive('put')
+        ->once()
+        ->with(
+            $cacheKey,
+            Mockery::type(InflightQueryError::class),
+            60
+        )
+    ;
+
+    // Expect dispatch flag to be cleared
+    $this->cache
+        ->shouldReceive('forget')
+        ->once()
+        ->with('test:dispatching:abc123')
+    ;
+
+    // Create a RecordableQuery with invalid model class that will fail when executed
+    $recordableQuery = new RecordableQuery(
+        'NonExistentModelClass',
+        []
+    );
+
+    $this->expectException(RuntimeException::class);
+
+    $this->action->handle(
+        recordableQuery: $recordableQuery,
+        cacheKey: $cacheKey,
+        lockKey: $lockKey,
+        ttl: $ttl
+    );
+});

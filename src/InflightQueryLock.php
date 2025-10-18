@@ -5,6 +5,7 @@ namespace Bensedev\LaravelInflightQueryLock;
 use Bensedev\LaravelInflightQueryLock\Contracts\DispatchInflightQueryJobActionContract;
 use Bensedev\LaravelInflightQueryLock\Contracts\Logger;
 use Bensedev\LaravelInflightQueryLock\Contracts\WaitForQueryResultActionContract;
+use Bensedev\LaravelInflightQueryLock\Exceptions\InflightQueryError;
 use Bensedev\LaravelInflightQueryLock\Support\QueryHasher;
 use Bensedev\LaravelInflightQueryLock\Support\QueryRecorder;
 use Bensedev\LaravelInflightQueryLock\ValueObjects\InflightQueryLockConfig;
@@ -31,7 +32,8 @@ final readonly class InflightQueryLock
      * @param  EloquentBuilder<Model>  $query
      * @param  array<int, string>  $columns
      * @param  string  $executionMethod  The method to execute (get, count, first, etc.)
-     * @return Collection<int, Model>|int|Model|null
+     * @param  bool  $async  If true, return null immediately if result not cached (polling mode)
+     * @return Collection<int, Model>|int|Model|null Returns null if async=true and result not ready
      *
      * @throws InvalidArgumentException
      */
@@ -39,7 +41,8 @@ final readonly class InflightQueryLock
         EloquentBuilder $query,
         array $columns,
         int $ttl,
-        string $executionMethod = 'get'
+        string $executionMethod = 'get',
+        bool $async = false
     ): mixed {
         // Include execution method in hash to differentiate get() from count(), etc.
         $hash = QueryHasher::hash(query: $query, executionMethod: $executionMethod);
@@ -52,8 +55,16 @@ final readonly class InflightQueryLock
         if ($this->cache->has(key: $cacheKey)) {
             $this->logger->handle(message: "Cache hit for query hash: {$hash}");
 
+            $result = $this->cache->get(key: $cacheKey);
+
+            // Check if the cached value is an error marker
+            if ($result instanceof InflightQueryError) {
+                $this->logger->handle(message: "Cached error marker found for hash: {$hash}");
+                throw $result;
+            }
+
             /** @var Collection<int, Model>|int|Model|null */
-            return $this->cache->get(key: $cacheKey);
+            return $result;
         }
 
         // Try to acquire lock first (before any expensive operations)
@@ -66,6 +77,13 @@ final readonly class InflightQueryLock
         if (! $lock->get()) {
             $this->logger->handle(message: "Lock not acquired for query hash: {$hash}, waiting for result");
 
+            // In async mode, return null immediately instead of waiting
+            if ($async) {
+                $this->logger->handle(message: "Async mode enabled, returning null (query still pending)");
+
+                return null;
+            }
+
             return $this->waiter->handle(cacheKey: $cacheKey, hash: $hash);
         }
 
@@ -76,8 +94,16 @@ final readonly class InflightQueryLock
             $this->logger->handle(message: "Cache hit after lock acquisition for hash: {$hash}");
             $lock->release();
 
+            $result = $this->cache->get(key: $cacheKey);
+
+            // Check if the cached value is an error marker
+            if ($result instanceof InflightQueryError) {
+                $this->logger->handle(message: "Cached error marker found after lock for hash: {$hash}");
+                throw $result;
+            }
+
             /** @var Collection<int, Model>|int|Model|null */
-            return $this->cache->get(key: $cacheKey);
+            return $result;
         }
 
         // Try to atomically set dispatch flag (only succeeds if not already set)
@@ -88,6 +114,13 @@ final readonly class InflightQueryLock
         if ($wasDispatched) {
             $this->logger->handle(message: "Job already dispatched by another request for hash: {$hash}");
             $lock->release();
+
+            // In async mode, return null immediately instead of waiting
+            if ($async) {
+                $this->logger->handle(message: "Async mode enabled, returning null (query still pending)");
+
+                return null;
+            }
 
             return $this->waiter->handle(cacheKey: $cacheKey, hash: $hash);
         }
@@ -107,6 +140,13 @@ final readonly class InflightQueryLock
 
         // Release the acquisition lock (job will handle execution)
         $lock->release();
+
+        // In async mode, return null immediately instead of waiting
+        if ($async) {
+            $this->logger->handle(message: "Async mode enabled, job dispatched, returning null (query still pending)");
+
+            return null;
+        }
 
         // Wait for result to be cached
         return $this->waiter->handle(cacheKey: $cacheKey, hash: $hash);

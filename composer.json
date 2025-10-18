@@ -63,6 +63,10 @@
     "scripts": {
         "test": "vendor/bin/pest",
         "analyse": "vendor/bin/phpstan analyse --error-format=table",
-        "format": "vendor/bin/pint"
+        "format": "vendor/bin/pint",
+        "ci": [
+            "@analyse",
+            "@test"
+        ]
     }
 }

@@ -4,11 +4,14 @@ namespace Bensedev\LaravelInflightQueryLock\Actions;
 
 use Bensedev\LaravelInflightQueryLock\Contracts\ExecuteInflightQueryActionContract;
 use Bensedev\LaravelInflightQueryLock\Contracts\Logger;
+use Bensedev\LaravelInflightQueryLock\Exceptions\InflightQueryError;
 use Bensedev\LaravelInflightQueryLock\ValueObjects\RecordableQuery;
+use Bensedev\TypeGuard\Guard;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Application;
+use Illuminate\Support\Str;
 use Psr\SimpleCache\InvalidArgumentException;
 use RuntimeException;
 use Throwable;
@@ -77,6 +80,22 @@ final readonly class ExecuteInflightQueryAction implements ExecuteInflightQueryA
             return $results;
         } catch (Throwable $e) {
             $this->logger->handle(message: "Error executing query: {$e->getMessage()}");
+
+            // Store error marker in cache with short TTL (60 seconds)
+            $errorMarker = InflightQueryError::fromThrowable($e);
+            $this->cache->put(
+                key: $cacheKey,
+                value: $errorMarker,
+                ttl: 60
+            );
+
+            // Clear dispatch flag to allow retry after error TTL expires
+            // Derive dispatch flag key from cache key: result -> dispatching
+            $dispatchFlagKey = Guard::string(Str::replace(':result:', ':dispatching:', $cacheKey));
+            $this->cache->forget($dispatchFlagKey);
+
+            $this->logger->handle(message: "Stored error marker in cache for key: {$cacheKey}");
+
             throw $e;
         } finally {
             // Always cleanup recursion context, regardless of success or failure
