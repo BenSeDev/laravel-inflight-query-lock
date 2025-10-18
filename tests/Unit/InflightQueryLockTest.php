@@ -3,6 +3,7 @@
 use Bensedev\LaravelInflightQueryLock\Contracts\DispatchInflightQueryJobActionContract;
 use Bensedev\LaravelInflightQueryLock\Contracts\Logger;
 use Bensedev\LaravelInflightQueryLock\Contracts\WaitForQueryResultActionContract;
+use Bensedev\LaravelInflightQueryLock\Exceptions\InflightQueryError;
 use Bensedev\LaravelInflightQueryLock\InflightQueryLock;
 use Bensedev\LaravelInflightQueryLock\Tests\Stubs\StubTestModel;
 use Bensedev\LaravelInflightQueryLock\ValueObjects\InflightQueryLockConfig;
@@ -532,4 +533,336 @@ it('is a readonly class', function (): void {
     $reflection = new ReflectionClass(InflightQueryLock::class);
 
     expect($reflection->isReadOnly())->toBeTrue();
+})->skip('Requires database connection');
+
+it('returns null immediately in async mode when result not cached', function (): void {
+    $query = StubTestModel::query()->where('id', '>', 10);
+    $columns = ['*'];
+    $ttl = 3600;
+
+    // Mock cache miss
+    $this->cache
+        ->shouldReceive('has')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:result:/'))
+        ->andReturn(false)
+    ;
+
+    // Mock lock acquisition failure (another request is running the query)
+    $lock = Mockery::mock(Lock::class);
+    $lock->shouldReceive('get')->once()->andReturn(false);
+
+    $this->cache
+        ->shouldReceive('lock')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:lock:/'), 30)
+        ->andReturn($lock)
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with(Mockery::pattern('/^Lock not acquired for query hash:/'))
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with('Async mode enabled, returning null (query still pending)')
+    ;
+
+    // Waiter should NOT be called in async mode
+    $this->waiter->shouldNotReceive('handle');
+
+    $result = $this->inflightLock->execute(
+        query: $query,
+        columns: $columns,
+        ttl: $ttl,
+        async: true
+    );
+
+    expect($result)->toBeNull();
+})->skip('Requires database connection');
+
+it('returns cached result immediately in async mode when available', function (): void {
+    $query = StubTestModel::query()->where('id', '>', 10);
+    $columns = ['*'];
+    $ttl = 3600;
+
+    $cachedResult = new Collection([
+        new StubTestModel(['id' => 11, 'name' => 'Cached']),
+    ]);
+
+    // Mock cache hit
+    $this->cache
+        ->shouldReceive('has')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:result:/'))
+        ->andReturn(true)
+    ;
+
+    $this->cache
+        ->shouldReceive('get')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:result:/'))
+        ->andReturn($cachedResult)
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with(Mockery::pattern('/^Cache hit for query hash:/'))
+    ;
+
+    $result = $this->inflightLock->execute(
+        query: $query,
+        columns: $columns,
+        ttl: $ttl,
+        async: true
+    );
+
+    // Should return result immediately when cached
+    expect($result)->toBe($cachedResult);
+})->skip('Requires database connection');
+
+it('dispatches job and returns null in async mode when acquiring lock', function (): void {
+    $query = StubTestModel::query()->where('id', '>', 10);
+    $columns = ['*'];
+    $ttl = 3600;
+
+    $lock = Mockery::mock(Lock::class);
+    $lock->shouldReceive('get')->once()->andReturn(true);
+    $lock->shouldReceive('release')->once();
+
+    // Mock cache miss (no result yet)
+    $this->cache
+        ->shouldReceive('has')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:result:/'))
+        ->andReturn(false)
+    ;
+
+    // Mock lock acquisition success (this request will dispatch the job)
+    $this->cache
+        ->shouldReceive('lock')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:lock:/'), 30)
+        ->andReturn($lock)
+    ;
+
+    // Mock dispatch flag (no job dispatched yet)
+    $this->cache
+        ->shouldReceive('add')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:dispatching:/'), true, Mockery::type('int'))
+        ->andReturn(true)
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with(Mockery::pattern('/^Lock acquired for query hash:/'))
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with('Async mode enabled, job dispatched, returning null (query still pending)')
+    ;
+
+    $this->dispatcher
+        ->shouldReceive('handle')
+        ->once()
+        ->with(
+            Mockery::type(RecordableQuery::class),
+            Mockery::pattern('/^inflight:result:/'),
+            Mockery::pattern('/^inflight:lock:/'),
+            3600
+        )
+    ;
+
+    // Waiter should NOT be called in async mode
+    $this->waiter->shouldNotReceive('handle');
+
+    $result = $this->inflightLock->execute(
+        query: $query,
+        columns: $columns,
+        ttl: $ttl,
+        async: true
+    );
+
+    expect($result)->toBeNull();
+})->skip('Requires database connection');
+
+it('returns null in async mode when job already dispatched by another request', function (): void {
+    $query = StubTestModel::query()->where('id', '>', 10);
+    $columns = ['*'];
+    $ttl = 3600;
+
+    $lock = Mockery::mock(Lock::class);
+    $lock->shouldReceive('get')->once()->andReturn(true);
+    $lock->shouldReceive('release')->once();
+
+    // Mock cache miss
+    $this->cache
+        ->shouldReceive('has')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:result:/'))
+        ->andReturn(false)
+    ;
+
+    // Mock lock acquisition
+    $this->cache
+        ->shouldReceive('lock')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:lock:/'), 30)
+        ->andReturn($lock)
+    ;
+
+    // Mock dispatch flag already set (another request dispatched the job)
+    $this->cache
+        ->shouldReceive('add')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:dispatching:/'), true, Mockery::type('int'))
+        ->andReturn(false)  // Returns false because key already exists
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with(Mockery::pattern('/^Job already dispatched by another request for hash:/'))
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with('Async mode enabled, returning null (query still pending)')
+    ;
+
+    // Dispatcher should NOT be called since job already dispatched
+    $this->dispatcher->shouldNotReceive('handle');
+
+    // Waiter should NOT be called in async mode
+    $this->waiter->shouldNotReceive('handle');
+
+    $result = $this->inflightLock->execute(
+        query: $query,
+        columns: $columns,
+        ttl: $ttl,
+        async: true
+    );
+
+    expect($result)->toBeNull();
+})->skip('Requires database connection');
+
+it('throws error marker when found in cache', function (): void {
+    $query = StubTestModel::query()->where('id', '>', 10);
+    $columns = ['*'];
+    $ttl = 3600;
+
+    $errorMarker = InflightQueryError::fromThrowable(
+        new RuntimeException('Query execution failed')
+    );
+
+    // Mock cache hit with error marker
+    $this->cache
+        ->shouldReceive('has')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:result:/'))
+        ->andReturn(true)
+    ;
+
+    $this->cache
+        ->shouldReceive('get')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:result:/'))
+        ->andReturn($errorMarker)
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with(Mockery::pattern('/^Cache hit for query hash:/'))
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with(Mockery::pattern('/^Cached error marker found for hash:/'))
+    ;
+
+    $this->expectException(InflightQueryError::class);
+    $this->expectExceptionMessage('Query execution failed');
+
+    $this->inflightLock->execute(
+        query: $query,
+        columns: $columns,
+        ttl: $ttl
+    );
+})->skip('Requires database connection');
+
+it('throws error marker found after lock acquisition', function (): void {
+    $query = StubTestModel::query()->where('id', '>', 10);
+    $columns = ['*'];
+    $ttl = 3600;
+
+    $lock = Mockery::mock(Lock::class);
+    $lock->shouldReceive('get')->once()->andReturn(true);
+    $lock->shouldReceive('release')->once();
+
+    $errorMarker = InflightQueryError::fromThrowable(
+        new RuntimeException('Query execution failed')
+    );
+
+    // Mock cache miss initially
+    $this->cache
+        ->shouldReceive('has')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:result:/'))
+        ->andReturn(false)
+    ;
+
+    // Mock lock acquisition
+    $this->cache
+        ->shouldReceive('lock')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:lock:/'), 30)
+        ->andReturn($lock)
+    ;
+
+    // Double-check cache returns error marker
+    $this->cache
+        ->shouldReceive('has')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:result:/'))
+        ->andReturn(true)
+    ;
+
+    $this->cache
+        ->shouldReceive('get')
+        ->once()
+        ->with(Mockery::pattern('/^inflight:result:/'))
+        ->andReturn($errorMarker)
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with(Mockery::pattern('/^Cache hit after lock acquisition for hash:/'))
+    ;
+
+    $this->logger
+        ->shouldReceive('handle')
+        ->once()
+        ->with(Mockery::pattern('/^Cached error marker found after lock for hash:/'))
+    ;
+
+    $this->expectException(InflightQueryError::class);
+    $this->expectExceptionMessage('Query execution failed');
+
+    $this->inflightLock->execute(
+        query: $query,
+        columns: $columns,
+        ttl: $ttl
+    );
 })->skip('Requires database connection');
