@@ -155,6 +155,82 @@ $stats = Order::selectRaw('DATE(created_at) as date, COUNT(*) as count, SUM(tota
     ->get();
 ```
 
+### Async Mode (Polling)
+
+For long-running queries that might timeout, use async mode to poll for results:
+
+```php
+// First request - returns null immediately if query is still running
+$result = Order::where('status', 'completed')
+    ->inflight(ttl: 600)
+    ->async()  // Enable async mode
+    ->get();
+
+if ($result === null) {
+    // Query is still running in background
+    // Return a "processing" response to the user
+    return response()->json(['status' => 'processing']);
+}
+
+// Query completed - return the data
+return response()->json(['data' => $result]);
+```
+
+**How it works:**
+- First call triggers the query execution in the background
+- Returns `null` immediately instead of waiting
+- Frontend polls the endpoint every few seconds
+- Once the query completes, subsequent calls return the cached result
+
+**Example with polling:**
+
+```php
+// API endpoint
+Route::get('/api/heavy-report', function () {
+    $result = Report::with('relations')
+        ->heavyQuery()
+        ->inflight(ttl: 1800)
+        ->async()
+        ->get();
+
+    if ($result === null) {
+        return response()->json([
+            'status' => 'processing',
+            'message' => 'Report is being generated, please wait...'
+        ], 202); // 202 Accepted
+    }
+
+    return response()->json([
+        'status' => 'completed',
+        'data' => $result
+    ]);
+});
+```
+
+```javascript
+// Frontend polling example
+async function fetchReport() {
+    const response = await fetch('/api/heavy-report');
+    const data = await response.json();
+
+    if (data.status === 'processing') {
+        // Poll again in 2 seconds
+        setTimeout(fetchReport, 2000);
+        showLoadingSpinner();
+    } else {
+        // Data is ready
+        hideLoadingSpinner();
+        displayReport(data.data);
+    }
+}
+```
+
+**Benefits:**
+- No request timeouts for slow queries (1+ minute)
+- Better user experience with progress indicators
+- Servers can handle more concurrent requests
+- Prevents web server worker exhaustion
+
 ### Use Cases
 
 #### 1. Analytics Dashboards
@@ -296,6 +372,13 @@ php artisan horizon
 - High concurrency endpoints
 - Analytics/reporting queries
 - Public APIs with traffic spikes
+- Very slow queries (> 30s) - use with `async()` mode
+
+✅ **Use async mode when:**
+- Queries take 1+ minutes to execute
+- Risk of request timeouts
+- Better UX with progress indicators
+- Need to prevent server worker exhaustion
 
 ❌ **Avoid for:**
 - Simple queries (< 100ms)
